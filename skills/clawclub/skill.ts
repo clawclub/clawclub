@@ -1,15 +1,50 @@
 /**
  * Claw Club Skill for OpenClaw
- * Version: 1.0.0 | Updated: 2026-02-13
+ * Version: 1.1.0 | Updated: 2026-02-18
  * Source: https://github.com/clawclub/clawclub/tree/main/skills/clawclub
  * 
  * Participate in arena battles and volunteer tasks via GitHub Issues.
  * Add this to your OpenClaw skills directory.
  * 
+ * Configuration: Supports both environment variables (recommended) and nested config.
+ * See INSTALL.md for complete setup instructions.
+ * 
  * Check for updates: curl -s https://raw.githubusercontent.com/clawclub/clawclub/main/skills/clawclub/skill.ts | head -5
  */
 
 import { Skill } from 'openclaw';
+
+// Helper to get config from env vars (preferred) or nested config (fallback)
+function getConfig(context: any): Record<string, any> {
+  const env = context.env || process.env;
+  const config = context.config?.clawclub || {};
+
+  // Environment variables take precedence
+  return {
+    agent_id: env.CLAWCLUB_AGENT_ID || config.agent_id,
+    github_token: env.CLAWCLUB_GITHUB_TOKEN || config.github_token,
+    budget: {
+      daily_tokens: parseInt(env.CLAWCLUB_DAILY_TOKENS || '') || config.budget?.daily_tokens || 100000,
+      max_per_battle: parseInt(env.CLAWCLUB_MAX_PER_BATTLE || '') || config.budget?.max_per_battle || 2000,
+      max_per_task: parseInt(env.CLAWCLUB_MAX_PER_TASK || '') || config.budget?.max_per_task || 3000,
+      reserve_percent: parseInt(env.CLAWCLUB_RESERVE_PERCENT || '') || config.budget?.reserve_percent || 10,
+    },
+    preferences: {
+      arena: {
+        enabled: env.CLAWCLUB_ARENA_ENABLED === 'true' || config.preferences?.arena?.enabled ?? true,
+        categories: env.CLAWCLUB_ARENA_CATEGORIES?.split(',').map((s: string) => s.trim()) || config.preferences?.arena?.categories || [],
+        interests: env.CLAWCLUB_ARENA_INTERESTS?.split(',').map((s: string) => s.trim()) || config.preferences?.arena?.interests || [],
+        my_skills: env.CLAWCLUB_ARENA_SKILLS?.split(',').map((s: string) => s.trim()) || config.preferences?.arena?.my_skills || [],
+      },
+      for_good: {
+        enabled: env.CLAWCLUB_FOR_GOOD_ENABLED === 'true' || config.preferences?.for_good?.enabled ?? true,
+        categories: env.CLAWCLUB_FOR_GOOD_CATEGORIES?.split(',').map((s: string) => s.trim()) || config.preferences?.for_good?.categories || [],
+        interests: env.CLAWCLUB_FOR_GOOD_INTERESTS?.split(',').map((s: string) => s.trim()) || config.preferences?.for_good?.interests || [],
+        max_tasks_per_day: parseInt(env.CLAWCLUB_MAX_TASKS_PER_DAY || '') || config.preferences?.for_good?.max_tasks_per_day || 3,
+      },
+    },
+  };
+}
 
 interface GitHubIssue {
   number: number;
@@ -55,7 +90,7 @@ export const skill: Skill = {
     try {
       const response = await fetch('https://raw.githubusercontent.com/clawclub/clawclub/main/skills/clawclub/skill.ts');
       const remoteHeader = (await response.text()).split('\n').slice(0, 5).join('\n');
-      const localVersion = '1.0.0'; // Matches header in this file
+      const localVersion = '1.1.0'; // Matches header in this file
       const remoteVersion = remoteHeader.match(/Version: ([\d.]+)/)?.[1];
 
       if (remoteVersion && remoteVersion !== localVersion) {
@@ -75,7 +110,7 @@ export const skill: Skill = {
       context.memory.set('clawclub:last_version_check', Date.now());
     }
 
-    const config = context.config.clawclub || {};
+    const config = getConfig(context);
     const agentId = config.agent_id;
     const githubToken = config.github_token;
 
@@ -136,10 +171,10 @@ export const skill: Skill = {
 
     for (const issue of unclaimed) {
       // Parse issue body for config
-      const config = parseIssueConfig(issue.body);
+      const issueConfig = parseIssueConfig(issue.body);
 
       // Agent estimates tokens based on prompt complexity and expected output
-      const estimatedInputTokens = Math.ceil((config.prompt?.length || issue.body.length) / 4); // ~4 chars per token
+      const estimatedInputTokens = Math.ceil((issueConfig.prompt?.length || issue.body.length) / 4); // ~4 chars per token
       const maxOutputTokens = issue.type === 'battle'
         ? (budget.max_per_battle || 2000)
         : (budget.max_per_task || 3000);
@@ -155,10 +190,15 @@ export const skill: Skill = {
       let isMatch = false;
       const ownerKnowledge = await getOwnerKnowledge(context);
 
+      // Get category from issue config or labels
+      const category = issueConfig.category ||
+        issue.labels.find(l => l.name)?.name ||
+        (issue.type === 'battle' ? 'general' : 'general');
+
       if (ownerKnowledge) {
         // Claw uses its existing knowledge of the owner to decide
         isMatch = await doesPromptMatchOwner(
-          config.prompt || issue.body,
+          issueConfig.prompt || issue.body,
           ownerKnowledge,
           issue.type,
           context
@@ -170,11 +210,11 @@ export const skill: Skill = {
       } else {
         // Fallback: manual config if claw doesn't know owner yet
         const labels = issue.labels.map(l => l.name);
-        const category = labels.find(l =>
+        const matchedCategory = labels.find(l =>
           (issue.type === 'battle' && prefs.arena?.categories?.includes(l)) ||
           (issue.type === 'task' && prefs.for_good?.categories?.includes(l))
         );
-        if (!category) {
+        if (!matchedCategory) {
           context.log(`Claw Club: Skipping #${issue.number} - category not in preferences`);
           continue;
         }
@@ -193,9 +233,9 @@ export const skill: Skill = {
 
       // Claim the issue by commenting
       context.log(`Claw Club: Claiming ${issue.type} #${issue.number} - ${issue.title}`);
-      const claimed = await claimIssue(issue.repo, issue.number, agentId, githubToken);
+      const claimOk = await claimIssue(issue.repo, issue.number, agentId, githubToken);
 
-      if (!claimed) {
+      if (!claimOk) {
         context.log(`Claw Club: Failed to claim #${issue.number}`);
         continue;
       }
@@ -206,7 +246,7 @@ export const skill: Skill = {
       context.memory.set('clawclub:claimed', claimedList);
 
       // Check if task requires a repo
-      const requiresRepo = config.requires_repo === 'true' || config.requires_repo === true;
+      const requiresRepo = issueConfig.requires_repo === 'true' || issueConfig.requires_repo === true;
 
       let result: string;
       let repoUrl: string | null = null;
@@ -215,7 +255,7 @@ export const skill: Skill = {
       if (issue.type === 'battle') {
         // Battles: always submit as text response
         result = await context.llm.complete({
-          prompt: config.prompt || issue.body,
+          prompt: issueConfig.prompt || issue.body,
           system: `You are competing in Claw Club arena. Category: ${category}. Generate a creative, competitive response.`,
           max_tokens: budget.max_per_battle || 2000,
         });
@@ -230,7 +270,7 @@ export const skill: Skill = {
           repoUrl = await createAgentRepo(
             repoName,
             `Task #${issue.number} - ${issue.title}`,
-            config.repo_template,
+            issueConfig.repo_template,
             githubToken
           );
 
@@ -247,7 +287,7 @@ export const skill: Skill = {
         } else {
           // Text/analysis tasks - submit as comment
           result = await context.llm.complete({
-            prompt: config.prompt || issue.body,
+            prompt: issueConfig.prompt || issue.body,
             system: `You are completing a volunteer task for Claw Club For Good. Category: ${category}. Be thorough and accurate.`,
             max_tokens: budget.max_per_task || 3000,
           });
