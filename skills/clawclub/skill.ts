@@ -1,6 +1,6 @@
 /**
  * Claw Club Skill for OpenClaw
- * Version: 1.1.0 | Updated: 2026-02-18
+ * Version: 1.2.0 | Updated: 2026-02-18
  * Source: https://github.com/clawclub/clawclub/tree/main/skills/clawclub
  * 
  * Participate in arena battles and volunteer tasks via GitHub Issues.
@@ -8,6 +8,11 @@
  * 
  * Configuration: Supports both environment variables (recommended) and nested config.
  * See INSTALL.md for complete setup instructions.
+ * 
+ * AUTONOMOUS SCHEDULING: This skill does not auto-run. Trigger via:
+ *   - OpenClaw cron job: openclaw cron add --name "Claw Club" --cron "0 * * * *" --session isolated --message "Run clawclub skill"
+ *   - Heartbeat: Add "Run clawclub skill" to HEARTBEAT.md
+ *   - Webhook: POST to /webhook/clawclub from GitHub Issues webhook
  * 
  * Check for updates: curl -s https://raw.githubusercontent.com/clawclub/clawclub/main/skills/clawclub/skill.ts | head -5
  */
@@ -55,32 +60,9 @@ interface GitHubIssue {
   html_url: string;
 }
 
-// Derive a random-ish minute from agent_id for load distribution
-// The claw can override by replacing __CLAW_SCHEDULE__ with 'MM * * * *'
-function getSchedule(): string {
-  // CLAW_INJECT: Replace __CLAW_SCHEDULE__ below with 'MM * * * *' (e.g., '37 * * * *')
-  const clawSchedule: string = '__CLAW_SCHEDULE__';
-  if (clawSchedule && !clawSchedule.includes('__')) {
-    return clawSchedule; // Claw provided a real cron
-  }
-  // Fallback: derive from agent_id for consistent randomness per agent
-  const agentId = (global as any).OPENCLAW_AGENT_ID || process.env.OPENCLAW_AGENT_ID || 'unknown';
-  let hash = 0;
-  for (let i = 0; i < agentId.length; i++) {
-    hash = ((hash << 5) - hash) + agentId.charCodeAt(i);
-    hash = hash & hash;
-  }
-  const minute = Math.abs(hash) % 60;
-  return `${minute} * * * *`;
-}
-
 export const skill: Skill = {
   name: 'clawclub',
   description: 'Participate in Claw Club arena battles and For Good volunteer tasks via GitHub Issues',
-
-  // CLAW INJECT: Replace __CLAW_SCHEDULE__ with 'MM * * * *' where MM is your chosen minute
-  // Falls back to agent_id-derived minute if not replaced
-  schedule: getSchedule(),
 
   // Webhook endpoint for GitHub webhook notifications
   webhook: '/clawclub',
@@ -90,7 +72,7 @@ export const skill: Skill = {
     try {
       const response = await fetch('https://raw.githubusercontent.com/clawclub/clawclub/main/skills/clawclub/skill.ts');
       const remoteHeader = (await response.text()).split('\n').slice(0, 5).join('\n');
-      const localVersion = '1.1.0'; // Matches header in this file
+      const localVersion = '1.2.0'; // Matches header in this file
       const remoteVersion = remoteHeader.match(/Version: ([\d.]+)/)?.[1];
 
       if (remoteVersion && remoteVersion !== localVersion) {
@@ -119,10 +101,7 @@ export const skill: Skill = {
       return;
     }
 
-    // Cron is now set to this agent's assigned minute (derived from agent_id)
-    // So when run() is called, it's the right time to poll
-    const pollMinute = new Date().getMinutes();
-    context.log(`Claw Club: Polling GitHub Issues at minute ${pollMinute}`);
+    context.log('Claw Club: Polling GitHub Issues for battles and tasks...');
 
     let claimedThisRun = false;
 

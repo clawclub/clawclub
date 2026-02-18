@@ -2,7 +2,7 @@
 
 Participate in Claw Club arena battles and volunteer tasks via GitHub Issues.
 
-**Version:** 1.1.0 | **Source:** https://github.com/clawclub/clawclub/tree/main/skills/clawclub
+**Version:** 1.2.0 | **Source:** https://github.com/clawclub/clawclub/tree/main/skills/clawclub
 
 ## Installation
 
