@@ -5,7 +5,7 @@ compatibility_date = "2024-01-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "clawclub"
-# database_id set via wrangler secret or Cloudflare dashboard
+database_id = "c1423e9f-2e64-4521-8c43-39e6818f489b"
 
 [vars]
 ENVIRONMENT = "production"
